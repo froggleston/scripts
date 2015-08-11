@@ -4,11 +4,34 @@
 ## Author: Rob Davey, The Genome Analysis Centre (TGAC), UK
 ## http://www.ebi.ac.uk/ena/data/warehouse/usage
 
-## project, study, sample, experiment, or run accession
-[ $# -ge 1 ] && PROJ="$1" || read PROJ
+## supply an optional local path to link to the accession.
+## handy for importing into iRODS for example
+LOCALPATH=""
 
 ## returned result type. defaults to "read_run"
-RESULT=$2
+RESULT="read_run"
+
+while getopts "h?l:r:" opt; do
+    case "$opt" in
+    h|\?)
+        echo "show_ena.sh [options] ACCESSION"
+        exit 0
+        ;;
+    l)  LOCALPATH="$OPTARG"
+        ;;
+    r)  RESULT="$OPTARG"
+        ;;
+    :)
+        echo "ERROR: Option -$OPTARG requires an argument." >&2
+        exit 1
+        ;;
+    esac
+done
+
+IN=${@:OPTIND:1}
+
+## project, study, sample, experiment, or run accession. if no positional parameter exists, read from stdin
+[ $# -ge 1 ] && PROJ="$IN" || read PROJ
 
 if [ -z "$PROJ" ] ; then
   echo "No accession supplied"
@@ -41,6 +64,11 @@ while read -r line ; do
         echo "\"${HEADERS[j]}\":\"${VALUES[j]}\","
       done
     done <<< "$line" | sed '$s/,//'
+    
+    if [ ! -z "$LOCALPATH" ]; then
+      echo ",\"local_path\":\"$LOCALPATH\""
+    fi
+
     echo "},"
   fi
   i=$((i + 1));
