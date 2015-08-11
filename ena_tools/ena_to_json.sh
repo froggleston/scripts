@@ -5,12 +5,12 @@
 ## http://www.ebi.ac.uk/ena/data/warehouse/usage
 
 ## project, study, sample, experiment, or run accession
-PROJ=$1
+[ $# -ge 1 ] && PROJ="$1" || read PROJ
 
 ## returned result type. defaults to "read_run"
 RESULT=$2
 
-if [ -z "$1" ] ; then
+if [ -z "$PROJ" ] ; then
   echo "No accession supplied"
   exit 1
 fi
