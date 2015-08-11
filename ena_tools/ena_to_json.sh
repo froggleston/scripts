@@ -10,12 +10,12 @@ PROJ=$1
 ## returned result type. defaults to "read_run"
 RESULT=$2
 
-if [ -z "$1" ] then
+if [ -z "$1" ] ; then
   echo "No accession supplied"
   exit 1
 fi
 
-if [ -z "$2" ] then
+if [ -z "$2" ] ; then
   RESULT="read_run"
 fi
 
@@ -26,18 +26,18 @@ HEADERS=
 
 echo "["
 
-while read -r line; do
+while read -r line ; do
   ## substitute tabs for commas. IFS doesn't do nice multi-whitespace separation.
   line=${line//$'\t'/,}
 
-  if [ $i -eq 1 ]; then
+  if [ $i -eq 1 ] ; then
     # parse headers
     IFS=$',' read -r -a HEADERS <<< "$line"
   else
     # parse values
     echo "{"
     while IFS=$',' read -r -a VALUES ; do
-      for j in "${!HEADERS[@]}" do
+      for j in "${!HEADERS[@]}" ; do
         echo "\"${HEADERS[j]}\":\"${VALUES[j]}\","
       done
     done <<< "$line" | sed '$s/,//'
