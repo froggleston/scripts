@@ -1,0 +1,5 @@
+GCRh37
+GCRh38
+human
+genome
+variant
