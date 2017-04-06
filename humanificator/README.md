@@ -1,6 +1,6 @@
 # Prerequisites:
 
-You'll need Python 3, and to pip install feedparser and scholarly.
+You'll need Python 3, and to pip install nltk, feedparser and scholarly.
 
 # Running:
 
