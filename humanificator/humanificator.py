@@ -1,7 +1,7 @@
 import re, argparse, sys, scholarly, urllib
 from Bio import Entrez
 
-email = 'robert.davey@earlham.ac.uk'
+email = 'your.human.email@you.com'
 r = re.compile(r"GRCh3[0-9]|human|[Hh]omo sapiens")
 
 def search(query):
