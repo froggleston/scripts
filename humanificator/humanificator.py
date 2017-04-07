@@ -1,16 +1,33 @@
-import re, argparse, sys, scholarly, urllib, feedparser, nltk
+import re, argparse, sys, scholarly, urllib, feedparser, nltk, bs4
 nltk.download('punkt')
 nltk.download('wordnet')
+nltk.download('averaged_perceptron_tagger')
+nltk.download('maxent_ne_chunker')
+nltk.download('words')
 
 from nltk import word_tokenize, sent_tokenize, corpus
 from nltk.text import Text
+from nltk import chunk
+from nltk.chunk import *
+from nltk.chunk.util import *
+from nltk.chunk.regexp import *
+from nltk.tree import Tree
 from nltk.collocations import *
 from nltk.corpus import wordnet
 from Bio import Entrez
+from bs4 import BeautifulSoup
 
 email = 'your.email.here@you.com'
 
 wnl = nltk.WordNetLemmatizer()
+
+def grab_pmid(pmid=4304705):
+    url = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pmc&id={0}'.format(pmid)
+    with urllib.request.urlopen(url) as response:
+        html = response.read()
+        soup = BeautifulSoup(html)
+        #content = ''.join(['%s' % x for x in soup.body.contents])
+        return soup.get_text().strip()
 
 def search(query):
     Entrez.email = email
@@ -62,11 +79,131 @@ def word_phases(target_word, query_text, left_margin = 10, right_margin = 10):
                          
     ## join the sentences for each of the target phrase and return it
     return [''.join([x+' ' for x in con_sub]) for con_sub in concordance_txt]
- 
+
+def extract_phases(tokens, wordlist):
+    all_phases = []
+    text = nltk.Text(tokens)
+    for word in wordlist:
+        phases = word_phases(word, text)
+        if phases:
+            all_phases.append(phases)
+    return all_phases
+
+def chunk_entities(tokens):
+    ## produce tags
+    tagged = nltk.pos_tag(tokens)
+
+    ## identify named entities, and don't expand NE types
+    return nltk.chunk.ne_chunk(tagged, binary=True)
+
+def find_and_filter_bigrams(tokens):
+    # initialize finder object with the tokens
+    finder = nltk.collocations.BigramCollocationFinder.from_words(tokens)
+
+    # build a dictionary with bigrams and their frequencies
+    bigram_measures = nltk.collocations.BigramAssocMeasures()
+    scored = dict(finder.score_ngrams(bigram_measures.raw_freq))
+
+    # create the filter...
+    myfilter = create_filter_minfreq_inwords(scored, wordlist, 0.1)
+    before_filter = list(finder.score_ngrams(bigram_measures.raw_freq))
+    if args.verbose:
+        print('Before filter:\n', before_filter)
+
+    # apply filter
+    finder.apply_ngram_filter(myfilter)
+    after_filter = list(finder.score_ngrams(bigram_measures.raw_freq))
+    if args.verbose:
+        print('\nAfter filter:\n', after_filter)
+    return after_filter
+
+def score_chunks(chunkparser, tree, trace=0):
+    chunkscore = chunk.ChunkScore()
+    
+    tokens = tree.leaves()
+    gold = chunkparser.parse(Tree('S', tokens), trace)
+    chunkscore.score(gold, tree)
+
+    a = chunkscore.accuracy()*100
+    p = chunkscore.precision()*100
+    r = chunkscore.recall()*100
+    f = chunkscore.f_measure()*100
+    i = chunkscore.incorrect()
+    m = chunkscore.missed()
+
+    if args.verbose:
+        print('Testing: {0}'.format(tree))
+        print('Guessed: {0}'.format(chunkscore.guessed()))
+        print('\n/'+('='*75)+'\\')
+        print('Scoring', chunkparser)
+        print(('-'*77))
+        print('Accuracy: %5.1f%%' % (a), ' '*4, end=' ')
+        print('Precision: %5.1f%%' % (p), ' '*4, end=' ')
+        print('Recall: %5.1f%%' % (r), ' '*6, end=' ')
+        print('F-Measure: %5.1f%%' % (f))
+        print('Missing: {0} -> {1}'.format(len(m), m))
+        print('Incorrect: {0} -> {1}'.format(len(i), i))
+
+    return (a, p, r, f, i, m)
+
+def detectohumans(bigrams, phases, title):
+    if not bigrams:
+       print('No context detected to ascertain humanness')
+    else:
+       for bigram in bigrams:
+           if str.lower(bigram[0][0]) == 'human' or str.lower(bigram[0][1]) == 'human':
+               print(title.rstrip('.') + ', in humans.')
+           else:
+               print("No humans detected. This paper might be relevant to stuff other than humans.")
+
+def detectogenome(bigrams, phases, title):
+    orig_title_tokens = nltk.word_tokenize(title)
+    lc_title_tokens = nltk.word_tokenize(str.lower(title))
+
+    #grammar = "NE: {<JJ>*<NN|JJ|NNP><NN|NNP><IN|TO>*}"
+    #chunk_rule = ChunkRule("<.*>+", "Chunk all")
+    another_chunk = ChunkRule("<JJ>*<NN.*>+<NN.*>+<IN|OF>*", "[Complete] genome sequence ish")
+    chink_rule = ChinkRule("<CC|VB|IN|\.>", "Chink some")
+    another_chink = ChinkRule("<NNP><NN>", "Chink some more")
+    #split_rule = SplitRule("<JJ>*<NN|NNP><NN|NNP>", "Split some")
+
+#    cp = nltk.RegexpParser(grammar)
+    cp = nltk.RegexpChunkParser([another_chunk, chink_rule, another_chink], chunk_label='NP')
+   
+    o_chunks = chunk_entities(orig_title_tokens)
+    o_tree = cp.parse(o_chunks)
+    stats = score_chunks(cp, o_tree)
+    
+    maybe = False
+
+    ## check abstract text
+    for phase in phases:
+        for sent in phase:
+            if args.verbose:
+                print('\nPhase: {0}'.format(sent))
+
+            phase_tokens = nltk.word_tokenize(sent)
+            phase_chunks = chunk_entities(phase_tokens)
+            phase_tree = cp.parse(phase_chunks)
+            stats = score_chunks(cp, phase_tree)
+
+            if stats[0] > 50 and stats[1] > 50 and stats[2] > 25 and stats[3] > 0:
+                print('Looks like we have ourselves a genome paper')
+                maybe = True
+
+    for bigram in bigrams:
+        if str.lower(bigram[0][0]) == 'complete' and str.lower(bigram[0][1]).endswith('genome'):
+            print('We DEFINITELY have a genome paper')
+            return True
+    return maybe
+        
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-q', '--query')
     parser.add_argument('-w', '--wordfile')
+    parser.add_argument('-hs', dest='human', action='store_true')
+    parser.add_argument('-g', dest='genome', action='store_true')
     parser.add_argument('-v', dest='verbose', action='store_true')
     args = parser.parse_args()
     
@@ -123,7 +260,7 @@ if __name__ == '__main__':
     else:
         papers = fetch_details(id_list)
         for i, paper in enumerate(papers["PubmedArticle"]):
-            if paper["MedlineCitation"]['MeshHeadingList']:
+            if 'MeshHeadingList' in paper["MedlineCitation"]:
                 for mesh in paper["MedlineCitation"]['MeshHeadingList']:
                     for term in nltk.word_tokenize(mesh["DescriptorName"]):
                         meshterms.append(wnl.lemmatize(str.lower(term), 'n'))
@@ -134,39 +271,35 @@ if __name__ == '__main__':
     if not abstract:
         print('No abstracts available')
     else:
+        ## tokenise into word context
         tokens = nltk.word_tokenize(abstract)
-        tokens.extend(meshterms)
-        print(tokens)
-        text = nltk.Text(tokens)
-        
-        all_phases = []
-        for word in wordlist:
-            phases = word_phases(word, text)
-            if phases:
-                all_phases.append(phases)
 
+        ## identify named entities
+        entities = chunk_entities(tokens)
+        if args.verbose:
+            print('Chunks:\n{0}'.format(entities))
+
+        ## inject mesh terms and extract phases
+        tokens.extend(meshterms)
+        all_phases = extract_phases(tokens, wordlist)
         if args.verbose:
             print('Located potential phases:\n{0}'.format(all_phases))
 
-        # initialize finder object with the tokens
-        finder = nltk.collocations.BigramCollocationFinder.from_words(tokens)
-
-        # build a dictionary with bigrams and their frequencies
-        bigram_measures = nltk.collocations.BigramAssocMeasures()
-        scored = dict(finder.score_ngrams(bigram_measures.raw_freq))
-
-        # create the filter...
-        myfilter = create_filter_minfreq_inwords(scored, wordlist, 0.1)
-        before_filter = list(finder.score_ngrams(bigram_measures.raw_freq))
-        print('Before filter:\n', before_filter)
-
-        # apply filter
-        finder.apply_ngram_filter(myfilter)
-        after_filter = list(finder.score_ngrams(bigram_measures.raw_freq))
-        print('\nAfter filter:\n', after_filter)
+        filtered_bigrams = find_and_filter_bigrams(tokens)
         
-        if not after_filter:
-            print('No humans detected')
-        else:
-            print(args.query.rstrip('.') + ', in humans.')
-
+        if args.human:
+            detectohumans(filtered_bigrams, all_phases, args.query)
+        
+        if args.genome:
+            detected = detectogenome(filtered_bigrams, all_phases, args.query)
+            if detected:
+                for pmid in id_list:
+                    content = grab_pmid(pmid)
+                    print(content)
+                    seq_list = ['GenBank', 'ID', 'No.', 'ENA', 'SRA', 'NCBI', 'genome', 'accession']
+                    full_tokens = nltk.word_tokenize(content)
+                    entities = chunk_entities(full_tokens)
+                    full_phases = extract_phases(full_tokens, seq_list)
+                    print('Located potential full-text phases:\n{0}'.format(full_phases))
+                    full_filtered_bigrams = find_and_filter_bigrams(full_tokens)
+                    print(full_filtered_bigrams)
