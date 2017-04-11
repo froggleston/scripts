@@ -1,9 +1,10 @@
-import re, argparse, sys, scholarly, urllib, feedparser, nltk, bs4
+import re, argparse, sys, scholarly, urllib, feedparser, nltk, bs4, string
 nltk.download('punkt')
 nltk.download('wordnet')
 nltk.download('averaged_perceptron_tagger')
 nltk.download('maxent_ne_chunker')
 nltk.download('words')
+nltk.download('stopwords')
 
 from nltk import word_tokenize, sent_tokenize, corpus
 from nltk.text import Text
@@ -13,7 +14,7 @@ from nltk.chunk.util import *
 from nltk.chunk.regexp import *
 from nltk.tree import Tree
 from nltk.collocations import *
-from nltk.corpus import wordnet
+from nltk.corpus import wordnet, stopwords
 from Bio import Entrez
 from bs4 import BeautifulSoup
 
@@ -21,13 +22,32 @@ email = 'your.email.here@you.com'
 
 wnl = nltk.WordNetLemmatizer()
 
+translator = str.maketrans('', '', string.punctuation)
+
+refseq_pattern = re.compile(r'\b([A-Z]{2}_[\d]+)')
+insdc_pattern = re.compile(r'\b([SED]R[APRSXZ]\d{7})')
+genbank_pattern = re.compile(r'\b([A-Z]{1}[0-9]{5}|[A-Z]{2}[0-9]{6}|[A-Z]{4}[0-9]{8,9}|[A-Z]{5}[0-9]{7})(\.[0-9]{1,3})*')
+fallback_json = re.compile(r'\"text\":\"([A-Z0-9]+)\"')
+
 def grab_pmid(pmid=4304705):
-    url = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pmc&id={0}'.format(pmid)
-    with urllib.request.urlopen(url) as response:
+    print("Grabbing {0}".format(pmid))
+#    url = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id={0}'.format(pmid)
+    url = 'https://www.ncbi.nlm.nih.gov/pmc/articles/pmid/{0}/'.format(pmid)
+    headers = { 'User-Agent' : 'Mozilla/5.0 (Windows NT 6.1; WOW64; rv:12.0) Gecko/20100101 Firefox/12.0' }
+    req = urllib.request.Request(url=url, data=b'None', headers=headers)
+    with urllib.request.urlopen(req) as response:
         html = response.read()
-        soup = BeautifulSoup(html)
-        #content = ''.join(['%s' % x for x in soup.body.contents])
-        return soup.get_text().strip()
+        soup = BeautifulSoup(html, "lxml")
+        for script in soup(["script", "style"]):
+            script.decompose()
+        text = soup.get_text()
+
+        # break into lines and remove leading and trailing space on each
+        lines = (line.strip() for line in text.splitlines())
+        # break multi-headlines into a line each
+        chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+        # drop blank lines
+        return '\n'.join(chunk for chunk in chunks if chunk)
 
 def search(query):
     Entrez.email = email
@@ -106,9 +126,9 @@ def find_and_filter_bigrams(tokens):
 
     # create the filter...
     myfilter = create_filter_minfreq_inwords(scored, wordlist, 0.1)
-    before_filter = list(finder.score_ngrams(bigram_measures.raw_freq))
-    if args.verbose:
-        print('Before filter:\n', before_filter)
+#    before_filter = list(finder.score_ngrams(bigram_measures.raw_freq))
+#    if args.verbose:
+#        print('Before filter:\n', before_filter)
 
     # apply filter
     finder.apply_ngram_filter(myfilter)
@@ -153,8 +173,10 @@ def detectohumans(bigrams, phases, title):
        for bigram in bigrams:
            if str.lower(bigram[0][0]) == 'human' or str.lower(bigram[0][1]) == 'human':
                print(title.rstrip('.') + ', in humans.')
+               return True
            else:
                print("No humans detected. This paper might be relevant to stuff other than humans.")
+    return False
 
 def detectogenome(bigrams, phases, title):
     orig_title_tokens = nltk.word_tokenize(title)
@@ -202,7 +224,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-q', '--query')
     parser.add_argument('-w', '--wordfile')
-    parser.add_argument('-hs', dest='human', action='store_true')
+    parser.add_argument('-s', dest='human', action='store_true')
     parser.add_argument('-g', dest='genome', action='store_true')
     parser.add_argument('-v', dest='verbose', action='store_true')
     args = parser.parse_args()
@@ -224,6 +246,7 @@ if __name__ == '__main__':
     id_list = results['IdList']
     abstract = None
     meshterms = []
+    papers = []
 
     if not id_list:
         print('Nothing in pubmed, looking in arXiv and Google Scholar...')
@@ -278,28 +301,51 @@ if __name__ == '__main__':
         entities = chunk_entities(tokens)
         if args.verbose:
             print('Chunks:\n{0}'.format(entities))
-
-        ## inject mesh terms and extract phases
-        tokens.extend(meshterms)
-        all_phases = extract_phases(tokens, wordlist)
-        if args.verbose:
-            print('Located potential phases:\n{0}'.format(all_phases))
-
-        filtered_bigrams = find_and_filter_bigrams(tokens)
         
+        # extract base phases
+        base_phases = extract_phases(tokens, wordlist)
+        filtered_bigrams = find_and_filter_bigrams(tokens)
+        if args.verbose:
+            print('Located potential base phases:\n{0}'.format(base_phases))
+
         if args.human:
-            detectohumans(filtered_bigrams, all_phases, args.query)
+            if detectohumans(filtered_bigrams, base_phases, args.query) == False:
+                ## inject mesh terms and extract phases
+                tokens.extend(meshterms)
+                all_phases = extract_phases(tokens, wordlist)
+                mesh_bigrams = find_and_filter_bigrams(tokens)
+                if args.verbose:
+                    print('Located potential MeSH phases:\n{0}'.format(all_phases))
+                detectohumans(mesh_bigrams, all_phases, args.query)
         
         if args.genome:
-            detected = detectogenome(filtered_bigrams, all_phases, args.query)
+            detected = detectogenome(filtered_bigrams, base_phases, args.query)
             if detected:
-                for pmid in id_list:
-                    content = grab_pmid(pmid)
+                content = grab_pmid(id_list[0])
+                if args.verbose:
                     print(content)
-                    seq_list = ['GenBank', 'ID', 'No.', 'ENA', 'SRA', 'NCBI', 'genome', 'accession']
-                    full_tokens = nltk.word_tokenize(content)
-                    entities = chunk_entities(full_tokens)
-                    full_phases = extract_phases(full_tokens, seq_list)
-                    print('Located potential full-text phases:\n{0}'.format(full_phases))
-                    full_filtered_bigrams = find_and_filter_bigrams(full_tokens)
+                seq_list = ['GenBank', 'ID', 'No.', 'no.', 'ENA', 'SRA', 'NCBI', 'genome', 'accession', 'annotation', 'DDBJ', 'EMBL', 'deposited']
+                full_tokens = nltk.word_tokenize(content)
+                no_stop_tokens = [w.translate(translator) for w in full_tokens if not w in stopwords.words('english')]
+                entities = chunk_entities(full_tokens)
+                full_phases = extract_phases(full_tokens, seq_list)
+                full_filtered_bigrams = find_and_filter_bigrams(no_stop_tokens)
+                if args.verbose:
+                    print('Located full-text phases:\n{0}'.format(full_phases))
                     print(full_filtered_bigrams)
+
+                refseq_matches = set(refseq_pattern.findall(content))
+                insdc_matches = set(insdc_pattern.findall(content))
+                genbank_matches = set(genbank_pattern.findall(content))
+
+                fallback_matches = fallback_json.findall(content)
+                if not refseq_matches and not insdc_matches and not genbank_matches:
+                    for fbm in fallback_matches:
+                        refseq_matches = set(refseq_pattern.findall(fbm))
+                        insdc_matches = set(insdc_pattern.findall(fbm))
+                        genbank_matches = set(genbank_pattern.findall(fbm))
+
+                print("Refseq: {0}".format(refseq_matches))
+                print("INSDC: {0}".format(insdc_matches))
+                print("GenBank: {0}".format(genbank_matches))
+
