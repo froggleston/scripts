@@ -25,7 +25,7 @@ wnl = nltk.WordNetLemmatizer()
 translator = str.maketrans('', '', string.punctuation)
 
 refseq_pattern = re.compile(r'\b([A-Z]{2}_[\d]+)')
-insdc_pattern = re.compile(r'\b([SED]R[APRSXZ]\d{7})')
+insdc_pattern = re.compile(r'\b([SED]R[APRSXZ]\d{6,7})')
 genbank_pattern = re.compile(r'\b([A-Z]{1}[0-9]{5}|[A-Z]{2}[0-9]{6}|[A-Z]{4}[0-9]{8,9}|[A-Z]{5}[0-9]{7})(\.[0-9]{1,3})*')
 fallback_json = re.compile(r'\"text\":\"([A-Z0-9]+)\"')
 
