@@ -248,11 +248,16 @@ def detectogenome(bigrams, phases, title):
 #    cp = nltk.RegexpParser(grammar)
     cp = nltk.RegexpChunkParser([another_chunk, chink_rule, another_chink], chunk_label='NP')
    
-    o_chunks = chunk_entities(orig_title_tokens)
+    # title stats
+    o_chunks = chunk_entities(lc_title_tokens)
     o_tree = cp.parse(o_chunks)
     stats = score_chunks(cp, o_tree)
     
     maybe = False
+    
+    if stats[0] > 70 and stats[1] > 70 and stats[2] > 70 and stats[3] > 70:
+        print('From the title, looks like we have ourselves a genome paper')
+        maybe = True
 
     ## check abstract text
     for phase in phases:
@@ -266,11 +271,11 @@ def detectogenome(bigrams, phases, title):
             stats = score_chunks(cp, phase_tree)
 
             if stats[0] > 50 and stats[1] > 50 and stats[2] > 25 and stats[3] > 0:
-                print('Looks like we have ourselves a genome paper')
+                print('From the abstract, looks like we have ourselves a genome paper')
                 maybe = True
 
     for bigram in bigrams:
-        if str.lower(bigram[0][0]) == 'complete' and str.lower(bigram[0][1]).endswith('genome'):
+        if str.lower(bigram[0][0]) == 'complete' and (str.lower(bigram[0][1]).endswith('genome') or str.lower(bigram[0][1]).endswith('genomic')):
             print('We DEFINITELY have a genome paper')
             return True
     return maybe
@@ -358,8 +363,8 @@ if __name__ == '__main__':
 
         ## identify named entities
         entities = chunk_entities(tokens)
-        if args.verbose:
-            print('Chunks:\n{0}'.format(entities))
+#        if args.verbose:
+#            print('Chunks:\n{0}'.format(entities))
         
         # extract base phases
         base_phases = extract_phases(tokens, wordlist)
