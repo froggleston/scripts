@@ -10,12 +10,14 @@ This will search for the article by its title, extract abstract and full content
 
 This query will result in the following output:
 
-```Looks like we have ourselves a genome paper
+```
+Looks like we have ourselves a genome paper
 Grabbing 24352235
 Accessions:
 Refseq: []
 INSDC: ['https://www.ncbi.nlm.nih.gov/sra/?term=ERP002447', 'https://www.ncbi.nlm.nih.gov/sra/?term=ERP002097']
-GenBank: []```
+GenBank: []
+```
 
 # Flags:
 
