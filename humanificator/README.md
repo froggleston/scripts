@@ -4,7 +4,7 @@ You'll need Python 3, and to pip install nltk, bs4 (BeautifulSoup), feedparser a
 
 # Usage:
 
-``` python humanificator.py -g -q -w genome-wordlist.txt "The complete genome sequence of a Neanderthal from the Altai Mountains"```
+``` python humanificator.py -g -w genome-wordlist.txt -q "The complete genome sequence of a Neanderthal from the Altai Mountains"```
 
 This will search for the article by its title, extract abstract and full content if possible, and search for words in your wordlist. With the ```-g``` option, this example will look for genome sequence accessions.
 
