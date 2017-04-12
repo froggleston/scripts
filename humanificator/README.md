@@ -8,6 +8,15 @@ You'll need Python 3, and to pip install nltk, bs4 (BeautifulSoup), feedparser a
 
 This will search for the article by its title, extract abstract and full content if possible, and search for words in your wordlist. With the ```-g``` option, this example will look for genome sequence accessions.
 
+This query will result in the following output:
+
+```Looks like we have ourselves a genome paper
+Grabbing 24352235
+Accessions:
+Refseq: []
+INSDC: ['https://www.ncbi.nlm.nih.gov/sra/?term=ERP002447', 'https://www.ncbi.nlm.nih.gov/sra/?term=ERP002097']
+GenBank: []```
+
 # Flags:
 
 ```-v``` - verbose
