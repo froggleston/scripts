@@ -1,5 +1,4 @@
 complete
 genome
-transcriptome
-exome
 sequence
+DNA

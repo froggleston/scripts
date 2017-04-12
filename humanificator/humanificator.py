@@ -26,7 +26,8 @@ translator = str.maketrans('', '', string.punctuation)
 
 refseq_pattern = re.compile(r'\b([A-Z]{2}_[\d]+)')
 insdc_pattern = re.compile(r'\b([SED]R[APRSXZ]\d{6,7})')
-genbank_pattern = re.compile(r'\b([A-Z]{1}[0-9]{5}|[A-Z]{2}[0-9]{6}|[A-Z]{4}[0-9]{8,9}|[A-Z]{5}[0-9]{7})(\.[0-9]{1,3})*')
+#genbank_pattern = re.compile(r'\b([A-Z]{1}[0-9]{5}|[A-Z]{2}[0-9]{6}|[A-Z]{4}[0-9]{8,9}|[A-Z]{5}[0-9]{7})(\.[0-9]{1,3})*')
+genbank_pattern = re.compile(r'\b([HNTRWUBIGS]{1}[0-9]{5}|(?:A[AIWFY]{1}|B[EFGIMQU]{1}|C[ABDFKNOVX]{1}|D[NRTVWYQ]{1}|E[BCEGHLSVWXYFU]{1}|F[CDEFGKLJ]{1}|G[DEHORTWQU]{1}|H[OSMQ]{1}|J[GKZFNQX]{1}|K[CFJMPRTUXY]{1})[0-9]{6}|[A-Z]{4}[0-9]{8,9}|[A-Z]{5}[0-9]{7}\.[0-9]{1,3})')
 fallback_json = re.compile(r'\"text\":\"([A-Z0-9]+)\"')
 
 def grab_pmid(pmid=4304705):
@@ -38,14 +39,32 @@ def grab_pmid(pmid=4304705):
     with urllib.request.urlopen(req) as response:
         html = response.read()
         soup = BeautifulSoup(html, "lxml")
-        for script in soup(["script", "style"]):
+        ## warning - all this is NCBI specific HTML munging
+        # grab article div
+        article = soup.find('div', attrs={'class':'article'})
+        
+        # scrub refs
+        article.find('div', attrs={'id':'reference-list'}).decompose()
+
+        # scrub article citation header
+        article.find('div', attrs={'class':'fm-sec'}).decompose()
+
+        # scrub figures and tables
+        article.find('div', attrs={'class':'fig'}).decompose()
+        article.find('div', attrs={'class':'table-wrap'}).decompose()
+        
+        # remove scripts, inline styling, headings and inline anchors/hrefs
+        for script in article(["script", "style", "h1", "h2", "h3", "h4", "a"]):
             script.decompose()
-        text = soup.get_text()
+        text = article.get_text()
 
         # break into lines and remove leading and trailing space on each
-        lines = (line.strip() for line in text.splitlines())
+        chunks = (line.strip() for line in text.splitlines())
+
+        ## this seemed to get rid of some trailing full-stops and whitespace helpful for tokenising
         # break multi-headlines into a line each
-        chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+#        chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+
         # drop blank lines
         return '\n'.join(chunk for chunk in chunks if chunk)
 
@@ -69,11 +88,17 @@ def fetch_details(id_list):
     return results
 
 ## create a filter that consults a scored dictionary and a list of query words, from http://stackoverflow.com/questions/23479179/combining-filters-in-nltk-collocations
-def create_filter_minfreq_inwords(scored, words, minfreq):
+def create_bigram_filter_minfreq_inwords(scored, words, minfreq):
     def bigram_filter(w1, w2):
         return (w1 not in words and w2 not in words) and (
                 (w1, w2) in scored and scored[w1, w2] <= minfreq)
     return bigram_filter
+
+def create_trigram_filter_minfreq_inwords(scored, words, minfreq):
+    def trigram_filter(w1, w2, w3):
+        return (w1 not in words and w2 not in words and w3 not in words) and (
+                (w1, w3, w3) in scored and scored[w1, w2, w3] <= minfreq)
+    return trigram_filter
 
 ## collect word phases, from https://simply-python.com/2014/03/14/saving-output-of-nltk-text-concordance/
 def word_phases(target_word, query_text, left_margin = 10, right_margin = 10):
@@ -84,12 +109,6 @@ def word_phases(target_word, query_text, left_margin = 10, right_margin = 10):
         left_margin and right_margin allocate the number of words/pununciation before and after target word
         Left margin will take note of the beginning of the text
     """
-    ## Create list of tokens using nltk function
-    #tokens = nltk.word_tokenize(abstract)
-     
-    ## Create the text of tokens
-    #text = nltk.Text(tokens)
- 
     ## Collect all the index or offset position of the target word
     c = nltk.ConcordanceIndex(query_text.tokens, key = lambda s: s.lower())
  
@@ -125,17 +144,53 @@ def find_and_filter_bigrams(tokens):
     scored = dict(finder.score_ngrams(bigram_measures.raw_freq))
 
     # create the filter...
-    myfilter = create_filter_minfreq_inwords(scored, wordlist, 0.1)
+    myfilter = create_bigram_filter_minfreq_inwords(scored, wordlist, 0.1)
 #    before_filter = list(finder.score_ngrams(bigram_measures.raw_freq))
 #    if args.verbose:
 #        print('Before filter:\n', before_filter)
 
     # apply filter
     finder.apply_ngram_filter(myfilter)
-    after_filter = list(finder.score_ngrams(bigram_measures.raw_freq))
+    
+    # remove empty
+    finder.apply_word_filter(lambda w: w in (''))
+
+    # remove low freq
+    finder.apply_freq_filter(2)
+
+    #after_filter = list(finder.score_ngrams(bigram_measures.raw_freq))
+    best_filter = sorted(finder.nbest(bigram_measures.raw_freq, 5))
     if args.verbose:
-        print('\nAfter filter:\n', after_filter)
-    return after_filter
+        #print('\nAfter filter:\n', after_filter)
+        print('\nTop bigrams:\n', best_filter)
+    return best_filter
+
+def find_and_filter_trigrams(tokens):
+    # initialize finder object with the tokens
+    finder = nltk.collocations.TrigramCollocationFinder.from_words(tokens)
+
+    # build a dictionary with bigrams and their frequencies
+    trigram_measures = nltk.collocations.TrigramAssocMeasures()
+    scored = dict(finder.score_ngrams(trigram_measures.raw_freq))
+
+    # create the filter...
+    myfilter = create_trigram_filter_minfreq_inwords(scored, wordlist, 0.1)
+
+    # apply filter
+    finder.apply_ngram_filter(myfilter)
+
+    # remove empty
+    finder.apply_word_filter(lambda w: w in (''))
+    
+    # remove low freq
+    finder.apply_freq_filter(2)
+
+    #after_filter = list(finder.score_ngrams(trigram_measures.raw_freq))
+    best_filter = sorted(finder.nbest(trigram_measures.raw_freq, 5))
+    if args.verbose:
+        #print('\nAfter filter:\n', after_filter)
+        print('\nTop trigrams:\n', best_filter)
+    return best_filter
 
 def score_chunks(chunkparser, tree, trace=0):
     chunkscore = chunk.ChunkScore()
@@ -166,16 +221,17 @@ def score_chunks(chunkparser, tree, trace=0):
 
     return (a, p, r, f, i, m)
 
-def detectohumans(bigrams, phases, title):
+def detectotext(bigrams, phases, title, wordlist):
     if not bigrams:
-       print('No context detected to ascertain humanness')
+       print('No ngrams available to detect query text')
     else:
        for bigram in bigrams:
-           if str.lower(bigram[0][0]) == 'human' or str.lower(bigram[0][1]) == 'human':
-               print(title.rstrip('.') + ', in humans.')
-               return True
-           else:
-               print("No humans detected. This paper might be relevant to stuff other than humans.")
+           for word in wordlist:
+               if str.lower(bigram[0][0]) == word or str.lower(bigram[0][1]) == word:
+                   print(title.rstrip('.') + ', in {0}.'.format(word))
+                   return True
+               if args.verbose:
+                   print("{0} not detected. This paper might be relevant to stuff other than {0}.".format(word))
     return False
 
 def detectogenome(bigrams, phases, title):
@@ -184,7 +240,7 @@ def detectogenome(bigrams, phases, title):
 
     #grammar = "NE: {<JJ>*<NN|JJ|NNP><NN|NNP><IN|TO>*}"
     #chunk_rule = ChunkRule("<.*>+", "Chunk all")
-    another_chunk = ChunkRule("<JJ>*<NN.*>+<NN.*>+<IN|OF>*", "[Complete] genome sequence ish")
+    another_chunk = ChunkRule("<JJ>*<NN|NNP>?<NN|NNP>+<IN|OF>*", "[Complete] genome sequence ish")
     chink_rule = ChinkRule("<CC|VB|IN|\.>", "Chink some")
     another_chink = ChinkRule("<NNP><NN>", "Chink some more")
     #split_rule = SplitRule("<JJ>*<NN|NNP><NN|NNP>", "Split some")
@@ -224,7 +280,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-q', '--query')
     parser.add_argument('-w', '--wordfile')
-    parser.add_argument('-s', dest='human', action='store_true')
+    parser.add_argument('-d', dest='detect', action='store_true')
     parser.add_argument('-g', dest='genome', action='store_true')
     parser.add_argument('-v', dest='verbose', action='store_true')
     args = parser.parse_args()
@@ -232,7 +288,7 @@ if __name__ == '__main__':
     if args.wordfile is None:
         if args.verbose:
             print('No wordfile. Defaulting to human stuff')
-        wordlist = ['GCRh37', 'GCRh38', 'human', 'genome', 'variant']
+        wordlist = ['GCRh37', 'GCRh38', 'human']
     else:
         wordlist = []
         if args.verbose:
@@ -245,7 +301,8 @@ if __name__ == '__main__':
     results = search(args.query)
     id_list = results['IdList']
     abstract = None
-    meshterms = []
+    doi = None
+    meshterms = set()
     papers = []
 
     if not id_list:
@@ -286,10 +343,12 @@ if __name__ == '__main__':
             if 'MeshHeadingList' in paper["MedlineCitation"]:
                 for mesh in paper["MedlineCitation"]['MeshHeadingList']:
                     for term in nltk.word_tokenize(mesh["DescriptorName"]):
-                        meshterms.append(wnl.lemmatize(str.lower(term), 'n'))
+                        meshterms.add(wnl.lemmatize(str.lower(term), 'n'))
                 if args.verbose:
-                    print(meshterms)
+                    print("Found MeSH terms:\n{0}".format(meshterms))
             abstract = paper["MedlineCitation"]["Article"]["Abstract"]["AbstractText"][0]
+            doi = (elem for elem in paper["PubmedData"]["ArticleIdList"] if elem.attributes["IdType"] == 'doi')
+            break
 
     if not abstract:
         print('No abstracts available')
@@ -304,35 +363,33 @@ if __name__ == '__main__':
         
         # extract base phases
         base_phases = extract_phases(tokens, wordlist)
-        filtered_bigrams = find_and_filter_bigrams(tokens)
+        filtered_ngrams = find_and_filter_bigrams(tokens)
         if args.verbose:
             print('Located potential base phases:\n{0}'.format(base_phases))
 
-        if args.human:
-            if detectohumans(filtered_bigrams, base_phases, args.query) == False:
+        if args.detect:
+            if detectotext(filtered_ngrams, base_phases, args.query, wordlist) == False:
                 ## inject mesh terms and extract phases
                 tokens.extend(meshterms)
                 all_phases = extract_phases(tokens, wordlist)
                 mesh_bigrams = find_and_filter_bigrams(tokens)
                 if args.verbose:
                     print('Located potential MeSH phases:\n{0}'.format(all_phases))
-                detectohumans(mesh_bigrams, all_phases, args.query)
+                detectotext(mesh_bigrams, all_phases, args.query, wordlist)
         
         if args.genome:
-            detected = detectogenome(filtered_bigrams, base_phases, args.query)
+            detected = detectogenome(filtered_ngrams, base_phases, args.query)
             if detected:
                 content = grab_pmid(id_list[0])
-                if args.verbose:
-                    print(content)
                 seq_list = ['GenBank', 'ID', 'No.', 'no.', 'ENA', 'SRA', 'NCBI', 'genome', 'accession', 'annotation', 'DDBJ', 'EMBL', 'deposited']
                 full_tokens = nltk.word_tokenize(content)
                 no_stop_tokens = [w.translate(translator) for w in full_tokens if not w in stopwords.words('english')]
                 entities = chunk_entities(full_tokens)
                 full_phases = extract_phases(full_tokens, seq_list)
-                full_filtered_bigrams = find_and_filter_bigrams(no_stop_tokens)
+                full_filtered_ngrams = find_and_filter_trigrams(no_stop_tokens)
                 if args.verbose:
                     print('Located full-text phases:\n{0}'.format(full_phases))
-                    print(full_filtered_bigrams)
+                    print(full_filtered_ngrams)
 
                 refseq_matches = set(refseq_pattern.findall(content))
                 insdc_matches = set(insdc_pattern.findall(content))
@@ -345,7 +402,8 @@ if __name__ == '__main__':
                         insdc_matches = set(insdc_pattern.findall(fbm))
                         genbank_matches = set(genbank_pattern.findall(fbm))
 
-                print("Refseq: {0}".format(refseq_matches))
-                print("INSDC: {0}".format(insdc_matches))
-                print("GenBank: {0}".format(genbank_matches))
+                print("Accessions:")
+                print("Refseq: {0}".format(['https://www.ncbi.nlm.nih.gov/refseq/?term={}'.format(m) for m in refseq_matches]))
+                print("INSDC: {0}".format(['https://www.ncbi.nlm.nih.gov/sra/?term={}'.format(m) for m in insdc_matches]))
+                print("GenBank: {0}".format(['https://www.ncbi.nlm.nih.gov/nuccore/{}'.format(m) for m in genbank_matches]))
 
