@@ -51,15 +51,15 @@ echo "["
 
 while read -r line ; do
   ## substitute tabs for commas. IFS doesn't do nice multi-whitespace separation.
-  line=${line//$'\t'/,}
+  line=${line//$'\t'/^}
 
   if [ $i -eq 1 ] ; then
     # parse headers
-    IFS=$',' read -r -a HEADERS <<< "$line"
+    IFS=$'^' read -r -a HEADERS <<< "$line"
   else
     # parse values
     echo "{"
-    while IFS=$',' read -r -a VALUES ; do
+    while IFS=$'^' read -r -a VALUES ; do
       for j in "${!HEADERS[@]}" ; do
         echo "\"${HEADERS[j]}\":\"${VALUES[j]}\","
       done
